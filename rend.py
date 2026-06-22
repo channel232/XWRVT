@@ -1,12 +1,7 @@
-import os
-import random
-import subprocess
-import threading
-import time
+import os, random, subprocess, threading, time
 from pathlib import Path
 import gdown
 
-# ── Config ────────────────────────────────────────────────────────────────────
 TMP               = Path("/tmp/mjx9render")
 XKQT7             = "1sXwstU6lFL2G6msCSYife8GFt_YEmwN4"
 RVNM2             = "1KJRX_fSFyyRHhW_Lh846o9POxcrGgqL4"
@@ -20,7 +15,6 @@ TARGET_IMAGE_NAME = os.environ.get("TARGET_IMAGE_NAME")
 if not TARGET_IMAGE_NAME:
     raise SystemExit("TARGET_IMAGE_NAME env var not set.")
 
-# ── Setup dirs ────────────────────────────────────────────────────────────────
 TMP.mkdir(exist_ok=True)
 (TMP / "xkqt7").mkdir(exist_ok=True)
 (TMP / "rvnm2").mkdir(exist_ok=True)
@@ -30,32 +24,23 @@ xkqt7_dir  = TMP / "xkqt7"
 rvnm2_dir  = TMP / "rvnm2"
 wdpl9_path = TMP / "wdpl9" / "wdpl9.mp4"
 
-# ── Timeout download helper ───────────────────────────────────────────────────
 def download_with_timeout(fn, timeout_sec=1800, label="download"):
-    result = [None]
-    error  = [None]
+    result = [None]; error = [None]
     def worker():
-        try:
-            result[0] = fn()
-        except Exception as e:
-            error[0] = e
+        try: result[0] = fn()
+        except Exception as e: error[0] = e
     t = threading.Thread(target=worker, daemon=True)
-    t.start()
-    t.join(timeout_sec)
-    if t.is_alive():
-        raise TimeoutError(f"{label} timed out after {timeout_sec}s")
-    if error[0]:
-        raise error[0]
+    t.start(); t.join(timeout_sec)
+    if t.is_alive(): raise TimeoutError(f"{label} timed out after {timeout_sec}s")
+    if error[0]: raise error[0]
     return result[0]
 
-# ── Disk space check ──────────────────────────────────────────────────────────
 stat = os.statvfs(str(TMP))
 free_gb = (stat.f_bavail * stat.f_frsize) / (1024 ** 3)
 print(f"[DISK] Free space: {free_gb:.1f} GB")
 if free_gb < 4.0:
-    raise SystemExit(f"[DISK] Not enough free space ({free_gb:.1f} GB). Need at least 4 GB.")
+    raise SystemExit(f"[DISK] Not enough free space ({free_gb:.1f} GB).")
 
-# ── Download assets ───────────────────────────────────────────────────────────
 print("Fetching xkqt7...")
 try:
     download_with_timeout(
@@ -86,7 +71,6 @@ if not wdpl9_path.exists():
 else:
     print("wdpl9 already present, skipping.")
 
-# ── Find target image ─────────────────────────────────────────────────────────
 matches = list(xkqt7_dir.rglob(TARGET_IMAGE_NAME))
 if not matches:
     raise SystemExit(f"Target {TARGET_IMAGE_NAME} not found.")
@@ -94,7 +78,6 @@ image_path = matches[0]
 print(f"\n>>> FILE   : {image_path.name}")
 print(f">>> DURATION: {DURATION}s ({DURATION//60}m {DURATION%60}s)\n")
 
-# ── Shuffle songs ─────────────────────────────────────────────────────────────
 rvnm2_files = list(rvnm2_dir.glob("*.mp3"))
 if not rvnm2_files:
     raise SystemExit("No rvnm2 files found.")
@@ -103,7 +86,6 @@ print("Playback order:")
 for i, s in enumerate(rvnm2_files):
     print(f"  {i+1}. {s.name}")
 
-# ── Concat list (reshuffle each loop) ─────────────────────────────────────────
 concat_path = TMP / f"clist_{image_path.stem}.txt"
 estimated_len = 200
 repeats = max(1, (DURATION // (len(rvnm2_files) * estimated_len)) + 2)
@@ -114,11 +96,8 @@ with open(concat_path, "w") as f:
         for s in batch:
             f.write(f"file '{s}'\n")
 
-# ── Sub overlay timing ────────────────────────────────────────────────────────
-# Every 6–14 min randomized, 3–4 sec display, random bottom-left or bottom-right
-intervals_left  = []
+intervals_left = []
 intervals_right = []
-
 t = random.randint(360, 840)
 while t < DURATION - 10:
     show_dur = random.randint(3, 4)
@@ -136,20 +115,16 @@ def make_enable(intervals):
 
 enable_left  = make_enable(intervals_left)
 enable_right = make_enable(intervals_right)
-
 print(f"Overlay: {len(intervals_left)} left, {len(intervals_right)} right appearances")
 
-# ── Output path ───────────────────────────────────────────────────────────────
 output_path = TMP / f"OUT_{image_path.stem}.mp4"
 
-# ── Disk check after downloads ────────────────────────────────────────────────
 stat = os.statvfs(str(TMP))
 free_gb = (stat.f_bavail * stat.f_frsize) / (1024 ** 3)
 print(f"[DISK] Free after fetch: {free_gb:.1f} GB")
 if free_gb < 2.0:
     raise SystemExit(f"[DISK] Not enough space ({free_gb:.1f} GB free).")
 
-# ── FFmpeg ────────────────────────────────────────────────────────────────────
 filter_complex = (
     f"[0:v]scale=1920:1080:force_original_aspect_ratio=decrease,"
     f"pad=1920:1080:(ow-iw)/2:(oh-ih)/2,format=yuv420p[bg];"
@@ -161,33 +136,22 @@ filter_complex = (
 
 cmd = [
     "ffmpeg", "-y",
-    "-loop", "1",
-    "-framerate", str(FPS),
-    "-i", str(image_path),
+    "-loop", "1", "-framerate", str(FPS), "-i", str(image_path),
     "-stream_loop", "-1", "-i", str(wdpl9_path),
     "-f", "concat", "-safe", "0", "-i", str(concat_path),
     "-t", str(DURATION),
     "-filter_complex", filter_complex,
-    "-map", "[outv]",
-    "-map", "2:a",
-    "-c:v", "libx264",
-    "-preset", "ultrafast",
-    "-tune", "stillimage",
-    "-crf", "28",
-    "-r", str(FPS),
-    "-g", str(FPS * 2),
-    "-c:a", "aac",
-    "-b:a", f"{AUDIO_BITRATE_K}k",
-    "-ar", "44100",
-    "-movflags", "+faststart",
-    str(output_path),
+    "-map", "[outv]", "-map", "2:a",
+    "-c:v", "libx264", "-preset", "ultrafast", "-tune", "stillimage",
+    "-crf", "28", "-r", str(FPS), "-g", str(FPS * 2),
+    "-c:a", "aac", "-b:a", f"{AUDIO_BITRATE_K}k", "-ar", "44100",
+    "-movflags", "+faststart", str(output_path),
 ]
 
-# ── Run FFmpeg + size watcher ─────────────────────────────────────────────────
 print("\nRunning FFmpeg...")
 proc = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True)
 stopped_by_watcher = False
-under_minimum      = False
+under_minimum = False
 
 def size_watcher():
     global stopped_by_watcher
@@ -195,8 +159,8 @@ def size_watcher():
         time.sleep(15)
         if output_path.exists():
             size = output_path.stat().st_size
-            mb   = size / (1024 * 1024)
-            gb   = size / (1024 * 1024 * 1024)
+            mb = size / (1024 * 1024)
+            gb = size / (1024 * 1024 * 1024)
             print(f"[SIZE] {mb:.1f} MB ({gb:.3f} GB)", flush=True)
             if size >= MAX_SIZE_BYTES:
                 print("[SIZE] Cap reached — stopping.", flush=True)
